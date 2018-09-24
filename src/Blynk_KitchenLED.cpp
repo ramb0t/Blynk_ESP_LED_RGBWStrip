@@ -50,17 +50,11 @@
 #include <ESP8266mDNS.h>
 #include <ArduinoOTA.h>
 
+//Config Includes
+#include <config.h>
+
 // Initialize the OLED display using Wire library
 SSD1306Wire  display(0x3c, D1, D2);
-
-// You should get Auth Token in the Blynk App.
-// Go to the Project Settings (nut icon).
-char auth[] = "4db0c545f3294879add4bd786faf9630";
-
-// Your WiFi credentials.
-// Set password to "" for open networks.
-char ssid[] = "HUAWEI-B315-0154";
-char pass[] = "B4L4D18Y42E";
 
 // Esp8266 pins.
 const int RED_PIN   = D6; // GPIO12
@@ -78,70 +72,6 @@ int w, r, g, b;
 int fadeMode = 0;
 int fadeState = 0; 
 int dimmer = 0; 
-
-BLYNK_WRITE(V0) 
-{   
-  dimmer = param.asInt(); 
-}
-
-BLYNK_WRITE(V1) // Widget WRITEs to Virtual Pin V1
-{   
-  w = param.asInt(); 
-  analogWrite(WHITE_PIN, w); 
-}
-
-BLYNK_WRITE(V2) 
-{   
-  r = param.asInt(); 
-  analogWrite(RED_PIN, r); 
-}
-
-BLYNK_WRITE(V3) 
-{   
-  g = param.asInt(); 
-  analogWrite(GREEN_PIN, g); 
-}
-
-BLYNK_WRITE(V4) 
-{   
-  b = param.asInt(); 
-  analogWrite(BLUE_PIN, b); 
-}
-
-
-BLYNK_WRITE(V5) 
-{   
-  fadeState = param.asInt(); 
-  if(fadeState){
-    timer.enable(fadeTimer);
-  }else{
-    timer.disable(fadeTimer);
-  }
-}
-
-//Off
-BLYNK_WRITE(V6) 
-{   
-  if(param.asInt()){
-    if(fadeState){
-      fadeState = 0; 
-      timer.disable(fadeTimer); 
-    }
-    breath(RED_PIN); 
-    r = 0; g = 0; b = 0; w = 0;
-    analogWrite( RED_PIN, r); 
-    analogWrite( BLUE_PIN, g); 
-    analogWrite( GREEN_PIN, b); 
-    analogWrite( WHITE_PIN, w); 
-    
-    virtualUpdate();
-  }
-}
-
-BLYNK_CONNECTED() {
-  Blynk.syncAll();
-  breath(BLUE_PIN);
-}
 
 // Timed function to update the display 
 void updateDisplay(){
@@ -248,6 +178,70 @@ void breath(int PIN){
       delay(1); 
     }
   }
+}
+
+BLYNK_WRITE(V0) 
+{   
+  dimmer = param.asInt(); 
+}
+
+BLYNK_WRITE(V1) // Widget WRITEs to Virtual Pin V1
+{   
+  w = param.asInt(); 
+  analogWrite(WHITE_PIN, w); 
+}
+
+BLYNK_WRITE(V2) 
+{   
+  r = param.asInt(); 
+  analogWrite(RED_PIN, r); 
+}
+
+BLYNK_WRITE(V3) 
+{   
+  g = param.asInt(); 
+  analogWrite(GREEN_PIN, g); 
+}
+
+BLYNK_WRITE(V4) 
+{   
+  b = param.asInt(); 
+  analogWrite(BLUE_PIN, b); 
+}
+
+
+BLYNK_WRITE(V5) 
+{   
+  fadeState = param.asInt(); 
+  if(fadeState){
+    timer.enable(fadeTimer);
+  }else{
+    timer.disable(fadeTimer);
+  }
+}
+
+//Off
+BLYNK_WRITE(V6) 
+{   
+  if(param.asInt()){
+    if(fadeState){
+      fadeState = 0; 
+      timer.disable(fadeTimer); 
+    }
+    breath(RED_PIN); 
+    r = 0; g = 0; b = 0; w = 0;
+    analogWrite( RED_PIN, r); 
+    analogWrite( BLUE_PIN, g); 
+    analogWrite( GREEN_PIN, b); 
+    analogWrite( WHITE_PIN, w); 
+    
+    virtualUpdate();
+  }
+}
+
+BLYNK_CONNECTED() {
+  Blynk.syncAll();
+  breath(BLUE_PIN);
 }
 
 void setup()
