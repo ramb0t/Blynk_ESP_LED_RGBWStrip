@@ -63,15 +63,21 @@ const int BLUE_PIN  = D5; // GPIO14
 const int WHITE_PIN = D8; // GPIO15
 const int BTN_PIN   = D3; // GPIO0
 
+bool Connected2Blynk = false;
+String localIP; 
+
 BlynkTimer timer;
 int displayTimer;
 int fadeTimer;
 int virtualTimer; 
+int connectTimer;
 
 int w, r, g, b; 
 int fadeMode = 0;
 int fadeState = 0; 
 int dimmer = 0; 
+
+unsigned long oldUpdate; 
 
 
 //********************************************//
@@ -80,36 +86,42 @@ void updateDisplay();
 void fadeLED();
 void virtualUpdate();
 void breath(int PIN);
+void checkConnection();
 
 //********************************************//
 
 BLYNK_WRITE(V0) 
 {   
   dimmer = param.asInt(); 
+  oldUpdate = millis();
 }
 
 BLYNK_WRITE(V1) // Widget WRITEs to Virtual Pin V1
 {   
   w = param.asInt(); 
-  analogWrite(WHITE_PIN, w); 
+  analogWrite(WHITE_PIN, w);
+  oldUpdate = millis(); 
 }
 
 BLYNK_WRITE(V2) 
 {   
   r = param.asInt(); 
-  analogWrite(RED_PIN, r); 
+  analogWrite(RED_PIN, r);
+  oldUpdate = millis(); 
 }
 
 BLYNK_WRITE(V3) 
 {   
   g = param.asInt(); 
   analogWrite(GREEN_PIN, g); 
+  oldUpdate = millis();
 }
 
 BLYNK_WRITE(V4) 
 {   
   b = param.asInt(); 
-  analogWrite(BLUE_PIN, b); 
+  analogWrite(BLUE_PIN, b);
+  oldUpdate = millis(); 
 }
 
 
@@ -121,6 +133,7 @@ BLYNK_WRITE(V5)
   }else{
     timer.disable(fadeTimer);
   }
+  oldUpdate = millis();
 }
 
 //Off
@@ -139,12 +152,14 @@ BLYNK_WRITE(V6)
     analogWrite( WHITE_PIN, w); 
     
     virtualUpdate();
+    oldUpdate = millis();
   }
 }
 
 BLYNK_CONNECTED() {
   Blynk.syncAll();
   breath(BLUE_PIN);
+  oldUpdate = millis();
 }
 
 
@@ -154,14 +169,23 @@ BLYNK_CONNECTED() {
 // Timed function to update the display 
 void updateDisplay(){
   display.clear(); 
+
+  // only update if data is fresh, else clear to prevent screen burn. 
+  if(millis() - oldUpdate < 10000){
   
-  display.drawString(0, 0, "W:" + String(w) );
-  display.drawString(0, 12, "R:" + String(r) );
-  display.drawString(0, 24, "G:" + String(g) );
-  display.drawString(0, 36, "B:" + String(b) );
+  if(WiFi.status() == WL_CONNECTED){
+    display.drawString(0, 0,  localIP);
+  }else{
+    display.drawString(0, 0, "WiFi Fail :(");
+  }
+
+  display.drawString(0, 12, "W:" + String(w) );
+  display.drawString(0, 24, "R:" + String(r) );
+  display.drawString(0, 36, "G:" + String(g) );
+  display.drawString(0, 48, "B:" + String(b) );
   
-  display.drawString(50, 0, "F:" + String(fadeState) + String(fadeMode) );
-  display.drawString(50, 12, "Dim:" + String(dimmer) );  
+  display.drawString(50, 12, "F:" + String(fadeState) + String(fadeMode) );
+  display.drawString(50, 24, "Dim:" + String(dimmer) );  
   display.display(); 
 
   Serial.println(String(w));
@@ -170,6 +194,7 @@ void updateDisplay(){
   Serial.println(String(b));
   Serial.println(String(fadeMode) + String(fadeState));
   Serial.println(String(dimmer)+"/n");
+  }
 }
 
 // fade function for pretties
@@ -258,6 +283,16 @@ void breath(int PIN){
   }
 }
 
+void checkConnection(){    // check every 11s if connected to Blynk server
+  if(!Blynk.connected()){
+    Serial.println("Not connected to Blynk server"); 
+    Blynk.connect();  // try to connect to server with default timeout
+  }
+  else{
+    Serial.println("Connected to Blynk server");     
+  }
+}
+
 //********************************************//
 
 void setup()
@@ -288,18 +323,45 @@ void setup()
   display.clear();
   display.setFont(ArialMT_Plain_10);
   display.setContrast(255);
-  display.drawString(0, 0, "Booting...");
+  display.drawString(0, 0, "Connecting...");
+  display.drawString(0, 12, "SSID:");
+  display.drawString(28, 12, ssid);
   display.display(); 
+
+  WiFi.hostname("ESP_KitchenBlynk");
+
+  // Connect to wifi
+  WiFi.begin(ssid, pass);  
+  int n = 0; 
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    display.drawString(n, 24, ".");
+    display.display(); 
+    n = n+8; 
+    if(n>120){break;}
+  }
+
 
   // Connect Blynk 
-  display.drawString(0, 12, "Connecting Blynk");
-  display.display(); 
-  Blynk.begin(auth, ssid, pass);
+  Blynk.config(auth);
 
-  display.drawString(0, 24, "Connected.. ");
+  if(WiFi.status() == WL_CONNECTED){
+    localIP = WiFi.localIP().toString();
+
+  display.clear();
+  display.drawString(0, 0, "WiFi Connected!");
+  display.drawString(0, 12, localIP);
+  display.drawString(0, 24, "Connecting Blynk");
+  display.display(); 
+  //Blynk.begin(auth, ssid, pass);
+  Connected2Blynk = Blynk.connect(); // default timeout
+
+
+  display.clear();
+  display.drawString(0, 36, "Connected Blynk... ");
   display.display(); 
 
-  display.drawString(0, 36, "Setting Up OTA.. ");
+  display.drawString(0, 48, "Setting Up OTA.. ");
   display.display(); 
 
   ArduinoOTA.begin();
@@ -324,10 +386,18 @@ void setup()
     display.display();
   });
 
+  // Wifi Failed
+  }  else{
+  display.clear();
+  display.drawString(0, 0, "WiFi Fail :(");
+  display.display(); 
+  }
+
   // Setup a function to be called x millisecond
   displayTimer = timer.setInterval(100L, updateDisplay);
   fadeTimer = timer.setInterval(20L, fadeLED); 
-  virtualTimer = timer.setInterval(1000L, virtualUpdate); 
+  virtualTimer = timer.setInterval(1000L, virtualUpdate);
+  connectTimer = timer.setInterval(10000L, checkConnection);
   timer.disable(fadeTimer); 
   timer.disable(virtualTimer); 
 
@@ -344,7 +414,9 @@ void setup()
 void loop()
 {
   // do Blynk Things
-  Blynk.run(); 
+  if(Blynk.connected()){
+    Blynk.run();
+  }
 
   // run the Blynk Timer
   timer.run();  
@@ -363,6 +435,7 @@ void loop()
     analogWrite(BLUE_PIN, b); 
     // update the App 
     virtualUpdate();
+    oldUpdate = millis();
   }
 
   //Do OTA stuff
