@@ -50,8 +50,19 @@
 #include <ESP8266mDNS.h>
 #include <ArduinoOTA.h>
 
+// MQTT includes
+#include <AsyncMqttClient.h>
+#include <Ticker.h>
+
 //Config Includes
 #include <config.h>
+
+/************* MQTT TOPICS (change these topics as you wish)  **************************/
+#define light_state_topic "blynk/kitchenesp"
+#define light_set_topic "blynk/kitchenesp/set"
+
+const char* on_cmd = "ON";
+const char* off_cmd = "OFF";
 
 // Initialize the OLED display using Wire library
 SSD1306Wire  display(0x3c, D1, D2);
@@ -80,13 +91,66 @@ int dimmer = 0;
 unsigned long oldUpdate; 
 
 
+byte red = 255;
+byte green = 255;
+byte blue = 255;
+byte brightness = 255;
+
+byte realRed = 0;
+byte realGreen = 0;
+byte realBlue = 0;
+
+bool startFade = false;
+unsigned long lastLoop = 0;
+int transitionTime = 0;
+bool inFade = false;
+int loopCount = 0;
+int stepR, stepG, stepB;
+int redVal, grnVal, bluVal;
+
+bool flash = false;
+bool startFlash = false;
+int flashLength = 0;
+unsigned long flashStartTime = 0;
+byte flashRed = red;
+byte flashGreen = green;
+byte flashBlue = blue;
+byte flashBrightness = brightness;
+
+bool stateOn = false;
+
+char message_buff[100];
+
+const int BUFFER_SIZE = 300;
+
+#define MQTT_MAX_PACKET_SIZE 512
+
+
+AsyncMqttClient mqttClient;
+Ticker mqttReconnectTimer;
+
+WiFiEventHandler wifiConnectHandler;
+WiFiEventHandler wifiDisconnectHandler;
+Ticker wifiReconnectTimer;
+
 //********************************************//
 
+void connectToWifi();
+void onWifiConnect(const WiFiEventStationModeGotIP& event);
+void onWifiDisconnect(const WiFiEventStationModeDisconnected& event);
+void connectToMqtt();
+void onMqttConnect(bool sessionPresent);
+void onMqttDisconnect(AsyncMqttClientDisconnectReason reason);
+void onMqttSubscribe(uint16_t packetId, uint8_t qos);
+void onMqttUnsubscribe(uint16_t packetId);
+void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total);
+void onMqttPublish(uint16_t packetId);
 void updateDisplay();
 void fadeLED();
 void virtualUpdate();
 void breath(int PIN);
 void checkConnection();
+
 
 //********************************************//
 
@@ -165,6 +229,91 @@ BLYNK_CONNECTED() {
 
 
 //***********************************************//
+
+
+void connectToWifi() {
+  Serial.println("Connecting to Wi-Fi...");
+  WiFi.begin(ssid, pass);
+}
+
+void onWifiConnect(const WiFiEventStationModeGotIP& event) {
+  Serial.println("Connected to Wi-Fi.");
+  connectToMqtt();
+}
+
+void onWifiDisconnect(const WiFiEventStationModeDisconnected& event) {
+  Serial.println("Disconnected from Wi-Fi.");
+  mqttReconnectTimer.detach(); // ensure we don't reconnect to MQTT while reconnecting to Wi-Fi
+  wifiReconnectTimer.once(2, connectToWifi);
+}
+
+void connectToMqtt() {
+  Serial.println("Connecting to MQTT...");
+  mqttClient.connect();
+}
+
+void onMqttConnect(bool sessionPresent) {
+  Serial.println("Connected to MQTT.");
+  Serial.print("Session present: ");
+  Serial.println(sessionPresent);
+  uint16_t packetIdSub = mqttClient.subscribe("test/lol", 2);
+  Serial.print("Subscribing at QoS 2, packetId: ");
+  Serial.println(packetIdSub);
+  mqttClient.publish("test/lol", 0, true, "test 1");
+  Serial.println("Publishing at QoS 0");
+  uint16_t packetIdPub1 = mqttClient.publish("test/lol", 1, true, "test 2");
+  Serial.print("Publishing at QoS 1, packetId: ");
+  Serial.println(packetIdPub1);
+  uint16_t packetIdPub2 = mqttClient.publish("test/lol", 2, true, "test 3");
+  Serial.print("Publishing at QoS 2, packetId: ");
+  Serial.println(packetIdPub2);
+}
+
+void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
+  Serial.println("Disconnected from MQTT.");
+
+  if (WiFi.isConnected()) {
+    mqttReconnectTimer.once(2, connectToMqtt);
+  }
+}
+
+void onMqttSubscribe(uint16_t packetId, uint8_t qos) {
+  Serial.println("Subscribe acknowledged.");
+  Serial.print("  packetId: ");
+  Serial.println(packetId);
+  Serial.print("  qos: ");
+  Serial.println(qos);
+}
+
+void onMqttUnsubscribe(uint16_t packetId) {
+  Serial.println("Unsubscribe acknowledged.");
+  Serial.print("  packetId: ");
+  Serial.println(packetId);
+}
+
+void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
+  Serial.println("Publish received.");
+  Serial.print("  topic: ");
+  Serial.println(topic);
+  Serial.print("  qos: ");
+  Serial.println(properties.qos);
+  Serial.print("  dup: ");
+  Serial.println(properties.dup);
+  Serial.print("  retain: ");
+  Serial.println(properties.retain);
+  Serial.print("  len: ");
+  Serial.println(len);
+  Serial.print("  index: ");
+  Serial.println(index);
+  Serial.print("  total: ");
+  Serial.println(total);
+}
+
+void onMqttPublish(uint16_t packetId) {
+  Serial.println("Publish acknowledged.");
+  Serial.print("  packetId: ");
+  Serial.println(packetId);
+}
 
 // Timed function to update the display 
 void updateDisplay(){
@@ -293,6 +442,7 @@ void checkConnection(){    // check every 11s if connected to Blynk server
   }
 }
 
+
 //********************************************//
 
 void setup()
@@ -348,43 +498,54 @@ void setup()
   if(WiFi.status() == WL_CONNECTED){
     localIP = WiFi.localIP().toString();
 
-  display.clear();
-  display.drawString(0, 0, "WiFi Connected!");
-  display.drawString(0, 12, localIP);
-  display.drawString(0, 24, "Connecting Blynk");
-  display.display(); 
-  //Blynk.begin(auth, ssid, pass);
-  Connected2Blynk = Blynk.connect(); // default timeout
-
-
-  display.clear();
-  display.drawString(0, 36, "Connected Blynk... ");
-  display.display(); 
-
-  display.drawString(0, 48, "Setting Up OTA.. ");
-  display.display(); 
-
-  ArduinoOTA.begin();
-  ArduinoOTA.onStart([]() {
     display.clear();
-    display.setFont(ArialMT_Plain_10);
-    display.setTextAlignment(TEXT_ALIGN_CENTER_BOTH);
-    display.drawString(display.getWidth()/2, display.getHeight()/2 - 10, "OTA Update");
-    display.display();
-  });
+    display.drawString(0, 0, "WiFi Connected!");
+    display.drawString(0, 12, localIP);
+    display.drawString(0, 24, "Connecting Blynk");
+    display.display(); 
+    //Blynk.begin(auth, ssid, pass);
+    Connected2Blynk = Blynk.connect(); // default timeout
 
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    display.drawProgressBar(4, 32, 120, 8, progress / (total / 100) );
-    display.display();
-  });
 
-  ArduinoOTA.onEnd([]() {
     display.clear();
-    display.setFont(ArialMT_Plain_10);
-    display.setTextAlignment(TEXT_ALIGN_CENTER_BOTH);
-    display.drawString(display.getWidth()/2, display.getHeight()/2, "Restart");
-    display.display();
-  });
+    display.drawString(0, 36, "Connect MQTT Server... ");
+    display.display(); 
+
+    wifiConnectHandler = WiFi.onStationModeGotIP(onWifiConnect);
+    wifiDisconnectHandler = WiFi.onStationModeDisconnected(onWifiDisconnect);
+
+    mqttClient.onConnect(onMqttConnect);
+    mqttClient.onDisconnect(onMqttDisconnect);
+    mqttClient.onSubscribe(onMqttSubscribe);
+    mqttClient.onUnsubscribe(onMqttUnsubscribe);
+    mqttClient.onMessage(onMqttMessage);
+    mqttClient.onPublish(onMqttPublish);
+    mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+
+    display.drawString(0, 48, "Setting Up OTA.. ");
+    display.display(); 
+
+    ArduinoOTA.begin();
+    ArduinoOTA.onStart([]() {
+      display.clear();
+      display.setFont(ArialMT_Plain_10);
+      display.setTextAlignment(TEXT_ALIGN_CENTER_BOTH);
+      display.drawString(display.getWidth()/2, display.getHeight()/2 - 10, "OTA Update");
+      display.display();
+    });
+
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+      display.drawProgressBar(4, 32, 120, 8, progress / (total / 100) );
+      display.display();
+    });
+
+    ArduinoOTA.onEnd([]() {
+      display.clear();
+      display.setFont(ArialMT_Plain_10);
+      display.setTextAlignment(TEXT_ALIGN_CENTER_BOTH);
+      display.drawString(display.getWidth()/2, display.getHeight()/2, "Restart");
+      display.display();
+    });
 
   // Wifi Failed
   }  else{

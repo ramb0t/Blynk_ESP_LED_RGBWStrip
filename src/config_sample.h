@@ -12,3 +12,7 @@ char auth[] = "";
 // Set password to "" for open networks.
 char ssid[] = "";
 char pass[] = "";
+
+// MQTT Server details
+#define MQTT_HOST IPAddress(192, 168, 88, 200)
+#define MQTT_PORT 1883
